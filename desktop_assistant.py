@@ -80,17 +80,17 @@ class PandaAssistant(QWidget):
         main_layout.addStretch(1)
 
         # 创建按钮并连接事件
-        screenshot_btn = self.create_transparent_button('发现灵感')
-        screenshot_btn.clicked.connect(lambda: self.take_screenshot("Sparked inspiration"))
+        screenshot_btn = self.create_transparent_button('记录灵感')
+        screenshot_btn.clicked.connect(lambda: self.take_screenshot("记录灵感"))
 
-        drifting_thoughts_btn = self.create_transparent_button('突发思绪')
-        drifting_thoughts_btn.clicked.connect(lambda: self.take_screenshot("Drifting thoughts"))
+        drifting_thoughts_btn = self.create_transparent_button('记录想法')
+        drifting_thoughts_btn.clicked.connect(lambda: self.take_screenshot("记录想法"))
 
        
         idea_layout = QHBoxLayout()
         idea_btn_separate = self.create_transparent_button('自由撰写')
         idea_btn_separate.clicked.connect(self.free_writing)
-        idea_btn_with_screenshot = self.create_transparent_button('添加想法')
+        idea_btn_with_screenshot = self.create_transparent_button('（给截图）添加文字')
         idea_btn_with_screenshot.clicked.connect(self.add_idea_with_screenshot)
         idea_layout.addWidget(idea_btn_separate)
         idea_layout.addWidget(idea_btn_with_screenshot)
@@ -244,17 +244,17 @@ class PandaAssistant(QWidget):
         self.hide()  # 隐藏主窗口
         dialog = FreeWritingDialog(self)
         if dialog.exec_():
-            self.save_free_writing(dialog.title_edit.text(), dialog.content_edit.toPlainText())
+            self.save_free_writing(dialog.title_edit.text(), dialog.content_edit.toPlainText(), "自由撰写")
         self.show()  # 重新显示主窗口
 
     def add_idea_with_screenshot(self):
-        self.take_screenshot("Idea Screenshots")
+        self.take_screenshot("（给截图）添加文字")
         dialog = IdeaWithScreenshotDialog(self, self.last_screenshot_filename)
         if dialog.exec_():
             self.save_idea_with_screenshot(dialog.title_edit.text(), dialog.content_edit.toPlainText())
 
-    def save_free_writing(self, title, content):
-        idea_folder = os.path.join(self.panda_assistant_folder, "Free Writing")
+    def save_free_writing(self, title, content, folder_name):
+        idea_folder = os.path.join(self.panda_assistant_folder, folder_name)
         os.makedirs(idea_folder, exist_ok=True)
         timestamp = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
         file_path = os.path.join(idea_folder, f"{timestamp}.md")
@@ -288,7 +288,7 @@ class PandaAssistant(QWidget):
         return re.sub(pattern, replace_image, content)
 
     def save_idea_with_screenshot(self, title, content):
-        idea_folder = os.path.join(self.panda_assistant_folder, "Ideas with Screenshots")
+        idea_folder = os.path.join(self.panda_assistant_folder, "（给截图）添加文字")
         os.makedirs(idea_folder, exist_ok=True)
         timestamp = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
         file_path = os.path.join(idea_folder, f"{timestamp}.md")
@@ -407,7 +407,7 @@ class FreeWritingDialog(QDialog):
         title = self.title_edit.text()
         content = self.content_edit.toPlainText()
         self.save_last_content(title, content)
-        self.parent.save_free_writing(title, content)
+        self.parent.save_free_writing(title, content, "自由撰写")
         super().accept()
 
     def save_last_content(self, title, content):
