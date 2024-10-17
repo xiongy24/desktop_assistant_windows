@@ -14,13 +14,15 @@ import webbrowser
 import uuid
 import json
 import shutil
+import time
 
 print("Imports successful")
 
 class ImageTextEdit(QTextEdit):
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, temp_image_folder=None):
         super().__init__(parent)
         self.parent = parent
+        self.temp_image_folder = temp_image_folder
 
     def keyPressEvent(self, event):
         if event.matches(QKeySequence.Paste):
@@ -30,7 +32,7 @@ class ImageTextEdit(QTextEdit):
                 if not image.isNull():
                     image_id = str(uuid.uuid4())
                     image_filename = f"{image_id}.png"
-                    image_path = os.path.join(self.parent.image_folder, image_filename)
+                    image_path = os.path.join(self.temp_image_folder, image_filename)
                     image.save(image_path)
                     self.insertPlainText(f"![Image]({image_filename})")
                     return
@@ -47,7 +49,7 @@ class PandaAssistant(QWidget):
         os.makedirs(self.panda_assistant_folder, exist_ok=True)
         
         # 更新 image_folder 路径
-        self.image_folder = os.path.join(self.panda_assistant_folder, "Free Writing Images")
+        self.image_folder = os.path.join(self.panda_assistant_folder, "Images")
         os.makedirs(self.image_folder, exist_ok=True)
         
         self.last_screenshot_folder = None
@@ -55,6 +57,7 @@ class PandaAssistant(QWidget):
         self.idea_click_count = 0
         self.idea_click_timer = QTimer()
         self.idea_click_timer.timeout.connect(self.reset_idea_click_count)
+        self.last_free_writing_file = None
         self.initUI()
 
     def initUI(self):
@@ -133,47 +136,18 @@ class PandaAssistant(QWidget):
         return button
 
     def take_screenshot(self, folder_name):
-        # 获取屏幕尺寸
-        hwin = win32gui.GetDesktopWindow()
-        width = win32api.GetSystemMetrics(win32con.SM_CXVIRTUALSCREEN)
-        height = win32api.GetSystemMetrics(win32con.SM_CYVIRTUALSCREEN)
-        left = win32api.GetSystemMetrics(win32con.SM_XVIRTUALSCREEN)
-        top = win32api.GetSystemMetrics(win32con.SM_YVIRTUALSCREEN)
-
-        # 创建设备上下文和位图
-        hwindc = win32gui.GetWindowDC(hwin)
-        srcdc = win32ui.CreateDCFromHandle(hwindc)
-        memdc = srcdc.CreateCompatibleDC()
-        bmp = win32ui.CreateBitmap()
-        bmp.CreateCompatibleBitmap(srcdc, width, height)
-        memdc.SelectObject(bmp)
-
-        # 复制屏幕到内存设备上下文
-        memdc.BitBlt((0, 0), (width, height), srcdc, (left, top), win32con.SRCCOPY)
-
-        # 更新截图保存路径
         screenshot_folder = os.path.join(self.panda_assistant_folder, folder_name)
         os.makedirs(screenshot_folder, exist_ok=True)
+        self.hide()
+        time.sleep(0.5)  # 给一点时间让窗口完全隐藏
+        screen = QApplication.primaryScreen()
+        screenshot = screen.grabWindow(0)
+        self.show()
 
-        # Save the bitmap to file in the specified folder
         timestamp = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
-        filename = f"{timestamp}.png"
-        file_path = os.path.join(screenshot_folder, filename)
-        bmp.SaveBitmapFile(memdc, file_path)
-
-        # Store the last screenshot location
-        self.last_screenshot_folder = screenshot_folder
-        self.last_screenshot_filename = filename
-
-        print(f"Screenshot saved as {file_path}")
-
-        # 清理
-        srcdc.DeleteDC()
-        memdc.DeleteDC()
-        win32gui.ReleaseDC(hwin, hwindc)
-        win32gui.DeleteObject(bmp.GetHandle())
-
-        self.idea_click_count = 0  # Reset click count when taking a new screenshot
+        self.last_screenshot_filename = os.path.join(screenshot_folder, f"screenshot_{timestamp}.png")
+        screenshot.save(self.last_screenshot_filename, 'png')
+        print(f"Screenshot saved as {self.last_screenshot_filename}")
 
     def on_idea_btn_clicked(self):
         self.idea_click_count += 1
@@ -244,7 +218,7 @@ class PandaAssistant(QWidget):
         self.hide()  # 隐藏主窗口
         dialog = FreeWritingDialog(self)
         if dialog.exec_():
-            self.save_free_writing(dialog.title_edit.text(), dialog.content_edit.toPlainText(), "自由撰写")
+            self.save_free_writing(dialog.title_edit.text(), dialog.content_edit.toPlainText(), "自由撰写", dialog.temp_image_folder)
         self.show()  # 重新显示主窗口
 
     def add_idea_with_screenshot(self):
@@ -253,14 +227,18 @@ class PandaAssistant(QWidget):
         if dialog.exec_():
             self.save_idea_with_screenshot(dialog.title_edit.text(), dialog.content_edit.toPlainText())
 
-    def save_free_writing(self, title, content, folder_name):
+    def save_free_writing(self, title, content, folder_name, temp_image_folder):
         idea_folder = os.path.join(self.panda_assistant_folder, folder_name)
         os.makedirs(idea_folder, exist_ok=True)
         timestamp = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
         file_path = os.path.join(idea_folder, f"{timestamp}.md")
 
+        # 创建一个与 Markdown 文件同名的图片文件夹
+        image_folder = os.path.join(idea_folder, f"{timestamp}_images")
+        os.makedirs(image_folder, exist_ok=True)
+
         # 处理图片
-        content = self.process_images_for_markdown(content, self.image_folder, idea_folder)
+        content = self.process_images_for_markdown(content, temp_image_folder, image_folder)
 
         full_content = f"# {title}\n\n{content}"
 
@@ -268,6 +246,12 @@ class PandaAssistant(QWidget):
             f.write(full_content)
 
         print(f"Free writing saved as {file_path}")
+
+        # 保存最后编辑的文件路径
+        self.last_free_writing_file = file_path
+
+        # 删除临时图片文件夹
+        shutil.rmtree(temp_image_folder)
 
     def process_images_for_markdown(self, content, source_folder, target_folder):
         import re
@@ -279,7 +263,7 @@ class PandaAssistant(QWidget):
             
             if os.path.exists(source_path):
                 shutil.copy2(source_path, target_path)
-                return f"![Image]({image_filename})"
+                return f"![Image]({os.path.basename(target_folder)}/{image_filename})"
             else:
                 print(f"Warning: Image file not found: {source_path}")
                 return match.group(0)
@@ -293,10 +277,18 @@ class PandaAssistant(QWidget):
         timestamp = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
         file_path = os.path.join(idea_folder, f"{timestamp}.md")
 
-        # 转换图片标记为Markdown格式
-        content = self.convert_image_tags_to_markdown(content)
+        # 创建一个与 Markdown 文件同名的图片文件夹
+        image_folder = os.path.join(idea_folder, f"{timestamp}_images")
+        os.makedirs(image_folder, exist_ok=True)
 
-        full_content = f"# {title}\n\n![Screenshot]({self.last_screenshot_filename})\n\n{content}"
+        # 处理图片
+        content = self.process_images_for_markdown(content, self.image_folder, image_folder)
+
+        # 复制截图到新的图片文件夹
+        screenshot_filename = os.path.basename(self.last_screenshot_filename)
+        shutil.copy2(self.last_screenshot_filename, os.path.join(image_folder, screenshot_filename))
+
+        full_content = f"# {title}\n\n![Screenshot]({os.path.basename(image_folder)}/{screenshot_filename})\n\n{content}"
 
         with open(file_path, "w", encoding="utf-8") as f:
             f.write(full_content)
@@ -314,11 +306,24 @@ class PandaAssistant(QWidget):
         screen_geometry = QDesktopWidget().screenGeometry(screen)
         
         # 计算窗口应该移动到的位置
-        x = screen_geometry.width() - self.width() - 20  # 20是与屏幕右边缘的间距
+        x = screen_geometry.width() - self.width() - 20  # 20是与幕右边缘的间距
         y = 20  # 与屏幕顶部的间距
         
         # 移动窗口
         self.move(x, y)
+
+    def load_last_free_writing(self):
+        if self.last_free_writing_file and os.path.exists(self.last_free_writing_file):
+            with open(self.last_free_writing_file, 'r', encoding='utf-8') as f:
+                content = f.read()
+            
+            # 分离标题和内容
+            lines = content.split('\n')
+            title = lines[0].lstrip('# ')
+            content = '\n'.join(lines[2:])
+
+            return title, content
+        return None, None
 
 class IdeaDialog(QDialog):
     def __init__(self, parent=None, with_screenshot=False, screenshot_filename=None):
@@ -366,114 +371,92 @@ class FreeWritingDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.parent = parent
-        self.setWindowModality(Qt.ApplicationModal)
-        self.image_folder = self.parent.image_folder
-        self.last_content_file = os.path.join(self.parent.panda_assistant_folder, "last_free_writing.json")
+        self.temp_image_folder = os.path.join(parent.panda_assistant_folder, f"temp_images_{uuid.uuid4()}")
+        os.makedirs(self.temp_image_folder, exist_ok=True)
         self.initUI()
 
     def initUI(self):
-        self.setWindowTitle('自由撰写')
-        self.setGeometry(100, 100, 600, 500)
-
         layout = QVBoxLayout()
 
-        title_layout = QHBoxLayout()
-        title_label = QLabel('标题:')
-        self.title_edit = QLineEdit()
-        title_layout.addWidget(title_label)
-        title_layout.addWidget(self.title_edit)
-        layout.addLayout(title_layout)
+        self.title_edit = QLineEdit(self)
+        self.title_edit.setPlaceholderText("输入标题")
+        layout.addWidget(self.title_edit)
 
-        self.content_edit = ImageTextEdit(self)
-        self.content_edit.setAcceptRichText(False)  # 禁用富文本，只使用纯文本
-        self.content_edit.setPlaceholderText("在此输入内容，可以使用Ctrl+V粘贴图片...")
+        # 添加提示标签
+        hint_label = QLabel("提示：使用 Ctrl+V 可以粘贴图片", self)
+        hint_label.setStyleSheet("color: #999999; font-style: italic;")
+        hint_label.setAlignment(Qt.AlignRight)
+        layout.addWidget(hint_label)
+
+        self.content_edit = ImageTextEdit(self.parent, self.temp_image_folder)
+        self.content_edit.setPlaceholderText("输入内容")
         layout.addWidget(self.content_edit)
 
-        button_layout = QHBoxLayout()
-        save_button = QPushButton('保存')
+        buttons = QHBoxLayout()
+        save_button = QPushButton("保存", self)
         save_button.clicked.connect(self.accept)
-        cancel_button = QPushButton('取消')
+        cancel_button = QPushButton("取消", self)
         cancel_button.clicked.connect(self.reject)
-        open_last_button = QPushButton('打开上次')
-        open_last_button.clicked.connect(self.open_last_content)
-        button_layout.addWidget(save_button)
-        button_layout.addWidget(cancel_button)
-        button_layout.addWidget(open_last_button)
-        layout.addLayout(button_layout)
+        open_last_button = QPushButton("打开上次", self)
+        open_last_button.clicked.connect(self.open_last_file)
+        buttons.addWidget(save_button)
+        buttons.addWidget(cancel_button)
+        buttons.addWidget(open_last_button)
 
+        layout.addLayout(buttons)
         self.setLayout(layout)
+        self.setWindowTitle("自由撰写")
 
-    def accept(self):
-        title = self.title_edit.text()
-        content = self.content_edit.toPlainText()
-        self.save_last_content(title, content)
-        self.parent.save_free_writing(title, content, "自由撰写")
-        super().accept()
-
-    def save_last_content(self, title, content):
-        last_content = {
-            'title': title,
-            'content': content
-        }
-        with open(self.last_content_file, 'w', encoding='utf-8') as f:
-            json.dump(last_content, f, ensure_ascii=False, indent=2)
-
-    def open_last_content(self):
-        if os.path.exists(self.last_content_file):
-            with open(self.last_content_file, 'r', encoding='utf-8') as f:
-                last_content = json.load(f)
-            self.title_edit.setText(last_content['title'])
-            self.content_edit.setPlainText(last_content['content'])
+    def open_last_file(self):
+        title, content = self.parent.load_last_free_writing()
+        if title and content:
+            self.title_edit.setText(title)
+            self.content_edit.setPlainText(content)
         else:
-            QMessageBox.information(self, "提示", "没有找到上次的内容")
+            QMessageBox.information(self, "提示", "没有找到上次编辑的文件")
+
+    def closeEvent(self, event):
+        # 删除临时图片文件夹
+        shutil.rmtree(self.temp_image_folder)
+        super().closeEvent(event)
 
 class IdeaWithScreenshotDialog(QDialog):
     def __init__(self, parent=None, screenshot_filename=None):
         super().__init__(parent)
         self.parent = parent
         self.screenshot_filename = screenshot_filename
-        self.image_folder = os.path.join(self.parent.panda_assistant_folder, "Idea Screenshots")
-        os.makedirs(self.image_folder, exist_ok=True)
         self.initUI()
 
     def initUI(self):
-        self.setWindowTitle('添加想法（带截图）')
-        self.setGeometry(100, 100, 500, 400)
-
         layout = QVBoxLayout()
 
-        title_layout = QHBoxLayout()
-        title_label = QLabel('标题:')
-        self.title_edit = QLineEdit()
-        title_layout.addWidget(title_label)
-        title_layout.addWidget(self.title_edit)
-        layout.addLayout(title_layout)
-
-        self.content_edit = ImageTextEdit(self)
-        self.content_edit.setAcceptRichText(False)  # 禁用富文本，只使用纯文本
-        self.content_edit.setPlaceholderText("在此输入内容，可以使用Ctrl+V粘贴图片...")
-        layout.addWidget(self.content_edit)
-
+        # 添加截图预览
         if self.screenshot_filename:
-            screenshot_label = QLabel(f"关联截图: {self.screenshot_filename}")
+            screenshot_label = QLabel(self)
+            pixmap = QPixmap(self.screenshot_filename)
+            scaled_pixmap = pixmap.scaled(400, 300, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+            screenshot_label.setPixmap(scaled_pixmap)
             layout.addWidget(screenshot_label)
 
-        button_layout = QHBoxLayout()
-        save_button = QPushButton('保存')
+        self.title_edit = QLineEdit(self)
+        self.title_edit.setPlaceholderText("输入标题")
+        layout.addWidget(self.title_edit)
+
+        self.content_edit = ImageTextEdit(self.parent, self.parent.image_folder)
+        self.content_edit.setPlaceholderText("输入内容")
+        layout.addWidget(self.content_edit)
+
+        buttons = QHBoxLayout()
+        save_button = QPushButton("保存", self)
         save_button.clicked.connect(self.accept)
-        cancel_button = QPushButton('取消')
+        cancel_button = QPushButton("取消", self)
         cancel_button.clicked.connect(self.reject)
-        button_layout.addWidget(save_button)
-        button_layout.addWidget(cancel_button)
-        layout.addLayout(button_layout)
+        buttons.addWidget(save_button)
+        buttons.addWidget(cancel_button)
 
+        layout.addLayout(buttons)
         self.setLayout(layout)
-
-    def accept(self):
-        title = self.title_edit.text()
-        content = self.content_edit.toPlainText()
-        self.parent.save_idea_with_screenshot(title, content)
-        super().accept()
+        self.setWindowTitle("添加想法")
 
 def main():
     app = QApplication(sys.argv)
